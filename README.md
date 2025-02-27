@@ -9,6 +9,16 @@ Microbatch mechanism written in Go. Could be useful in use cases such as:
 go get github.com/audipasuatmadi/go-microbatch
 ```
 
+# The Idea of Microbatching
+Microbatching groups multiple incoming data into one batch of data. This means less operation for the data, opting for throughput and sacrificing latency. Thus allows us to have less operations and faster performance on a large amount of data.
+
+<img width="1349" alt="image" src="https://github.com/user-attachments/assets/f0a0f756-98ac-4968-b7d1-2fca8c5dca22" />
+
+
+Other than for performance benefit, in nowadays, it allows for a unique use case in Large-Language Models. As user tend to send multiple messages from messaging platform such as Whatsapp, we surely don't want each message to be treated as individual message such as the picture below.
+<img width="1306" alt="image" src="https://github.com/user-attachments/assets/e7993b34-e9ea-42bc-9ab3-63c02b6bd0e9" />
+
+
 # Usage
 ## Example Usage
 ```go
