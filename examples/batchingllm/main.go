@@ -54,10 +54,18 @@ func main() {
 		fmt.Printf("> ")
 		userMessage, _ = in.ReadString('\n')
 
-		mb.Add(context.Background(), microbatch.Event[string]{
+		if userMessage == "exit\n" {
+			mb.Stop()
+			break
+		}
+
+		err := mb.Add(context.Background(), microbatch.Event[string]{
 			Payload: strings.TrimSpace(userMessage),
 			AddedAt: time.Now(),
 		})
+		if err != nil {
+			log.Println("error:", err)
+		}
 	}
 }
 
