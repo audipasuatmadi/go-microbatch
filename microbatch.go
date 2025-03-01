@@ -2,84 +2,149 @@ package microbatch
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 )
 
-type Microbatch[T any] interface {
-	Add(ctx context.Context, data T)
-	ReadData(ctx context.Context) (data []T)
-}
-
-type microbatch[T any] struct {
+type Microbatch[T any] struct {
+	wg sync.WaitGroup
 	mu sync.Mutex
 
-	buffer         []T
-	bufferIterator int32
-	maxBufferSize  int32
-	flushInterval  time.Duration
-	fullChan       chan bool
-	hasResetChan   chan bool
+	ctx    Context
+	stop   chan struct{}
+	ticker *time.Ticker
+	isOpen bool
+
+	eventStream  chan Event[T]
+	ResultStream chan ResultBatch[T]
+
+	strategy  BatchStrategy[T]
+	processor BatchProcessor[T]
 }
 
-func (m *microbatch[T]) Add(ctx context.Context, data T) {
+func (m *Microbatch[T]) Add(ctx context.Context, events ...Event[T]) error {
 	m.mu.Lock()
-	if m.bufferIterator < m.maxBufferSize {
-		m.buffer[m.bufferIterator] = data
-		m.bufferIterator++
+	defer m.mu.Unlock()
 
-		if m.bufferIterator == m.maxBufferSize {
-			m.fullChan <- true
-			<-m.hasResetChan
-		}
-	}
-	m.mu.Unlock()
-
-}
-
-func (m *microbatch[T]) ReadData(ctx context.Context) (data []T) {
-	<-m.fullChan
-	var allData []T = make([]T, 0)
-	for i := int32(0); i < m.bufferIterator; i++ {
-		allData = append(allData, m.buffer[i])
+	if !m.isOpen {
+		return ErrCantAddJob
 	}
 
-	m.buffer = make([]T, m.maxBufferSize)
-	m.bufferIterator = 0
-	m.hasResetChan <- true
-	return allData
+	for _, event := range events {
+		m.eventStream <- event
+	}
+
+	return nil
 }
 
-func (m *microbatch[T]) batchByInterval() {
+func (m *Microbatch[T]) Start() {
+	m.wg.Add(1)
+	go m.run()
+}
+
+func (m *Microbatch[T]) run() {
+	defer m.wg.Done()
+	batch := Batch[T]{}
+
 	for {
-		time.Sleep(m.flushInterval)
-		if m.bufferIterator > 0 {
+		select {
+		case event, ok := <-m.eventStream:
+			if !ok {
+				return
+			}
+
+			batch = append(batch, event)
+			if m.strategy.ShouldFlush(batch) {
+				flushBatch := m.strategy.FlushBatch(batch)
+				m.processBatch(flushBatch)
+
+				if len(batch) == len(flushBatch) {
+					batch = Batch[T]{}
+				} else {
+					remainingBatch := Batch[T]{}
+					for _, e := range batch {
+						if !m.strategy.ShouldFlush(Batch[T]{e}) {
+							remainingBatch = append(remainingBatch, e)
+						}
+					}
+					batch = remainingBatch
+				}
+			}
+
+		case <-m.ticker.C:
+			if len(batch) == 0 {
+				continue
+			}
+
+			flushBatch := m.strategy.FlushBatch(batch)
+			m.processBatch(flushBatch)
+
+			if len(batch) == len(flushBatch) {
+				batch = Batch[T]{}
+			} else {
+				remainingBatch := Batch[T]{}
+				for _, e := range batch {
+					if !m.strategy.ShouldFlush(Batch[T]{e}) {
+						remainingBatch = append(remainingBatch, e)
+					}
+				}
+				batch = remainingBatch
+			}
+
+		case <-m.stop:
 			m.mu.Lock()
-			m.fullChan <- true
-			<-m.hasResetChan
+			m.isOpen = false
 			m.mu.Unlock()
+			close(m.eventStream)
+			m.ticker.Stop()
+			return
 		}
 	}
 }
 
-type NewParams struct {
-	MaxSize       int32
-	FlushInterval time.Duration
+func (m *Microbatch[T]) processBatch(batch Batch[T]) {
+	processed := m.processor.Process(batch)
+	m.ResultStream <- processed
 }
 
-func New[T any](p NewParams) Microbatch[T] {
-	m := &microbatch[T]{
-		buffer:         make([]T, p.MaxSize),
-		bufferIterator: 0,
-		maxBufferSize:  p.MaxSize,
-		flushInterval:  p.FlushInterval,
-		fullChan:       make(chan bool, 1),
-		hasResetChan:   make(chan bool, 1),
+func (m *Microbatch[T]) Stop() {
+	close(m.stop)
+	m.wg.Wait()
+}
+
+type Config[T any] struct {
+	Processor   BatchProcessor[T]
+	Strategy    BatchStrategy[T]
+	FlushTicker *time.Ticker
+}
+
+func New[T any](ctx Context, p Config[T]) (*Microbatch[T], error) {
+	processor := p.Processor
+	if processor == nil {
+		processor = &simpleBatchProcessor[T]{}
 	}
 
-	if p.FlushInterval != 0 {
-		go m.batchByInterval()
+	strategy := p.Strategy
+	if strategy == nil {
+		return nil, errors.New("strategy is required")
 	}
 
-	return m
+	ticker := p.FlushTicker
+	if ticker == nil {
+		ticker = time.NewTicker(5 * time.Second)
+	}
+
+	m := &Microbatch[T]{
+		ctx:          ctx,
+		stop:         make(chan struct{}),
+		ticker:       ticker,
+		isOpen:       true,
+		eventStream:  make(chan Event[T]),
+		ResultStream: make(chan ResultBatch[T]),
+		strategy:     strategy,
+		processor:    processor,
+	}
+
+	return m, nil
 }
