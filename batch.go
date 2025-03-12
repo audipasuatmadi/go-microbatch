@@ -1,11 +1,12 @@
 package microbatch
 
-import "time"
+import (
+	"time"
+)
 
 type Event[T any] struct {
-	Key     string
 	Payload T
-	AddedAt time.Time
+	addedAt time.Time
 	flush   bool
 }
 
@@ -15,6 +16,10 @@ func (e *Event[T]) ShouldFlush() bool {
 
 func (e *Event[T]) Flush() {
 	e.flush = true
+}
+
+func (e *Event[T]) AddedAt() time.Time {
+	return e.addedAt
 }
 
 type ResultEvent[T any] struct {

@@ -13,13 +13,7 @@ import (
 )
 
 func main() {
-	mb, err := microbatch.New[string](microbatch.Context{
-		Ctx: context.Background(),
-	}, microbatch.Config[string]{
-		Strategy: &microbatch.SizeBasedStrategy[string]{
-			MaxSize: 3,
-		},
-	})
+	mb, err := microbatch.New[string](context.Background(), microbatch.Config[string]{})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -35,16 +29,10 @@ func main() {
 	// Simulate how people type in message platforms, where people
 	// type multiple messages which semantically related as one message.
 	ctx := context.Background()
-	mb.Add(ctx, microbatch.Event[string]{
-		Payload: messages[0],
-		AddedAt: time.Now(),
-	})
+	mb.Add(ctx, messages[0])
 	fmt.Printf("\n> %s\n", messages[0])
 	time.Sleep(2 * time.Second)
-	mb.Add(ctx, microbatch.Event[string]{
-		Payload: messages[1],
-		AddedAt: time.Now(),
-	})
+	mb.Add(ctx, messages[1])
 	fmt.Printf("\n> %s\n", messages[1])
 
 	// Input as many messages as you want
@@ -59,10 +47,7 @@ func main() {
 			break
 		}
 
-		err := mb.Add(context.Background(), microbatch.Event[string]{
-			Payload: strings.TrimSpace(userMessage),
-			AddedAt: time.Now(),
-		})
+		err := mb.Add(context.Background(), strings.TrimSpace(userMessage))
 		if err != nil {
 			log.Println("error:", err)
 		}
