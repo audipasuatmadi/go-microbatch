@@ -55,10 +55,10 @@ func main() {
 }
 
 func simulateSendToLLM(mb *microbatch.Microbatch[string]) {
-	for result := range mb.ResultStream {
+	for result := range mb.ResultBatch {
 		fmt.Printf("\nBatch:\n")
 		for _, event := range result {
-			fmt.Printf("\n\tEvent: %v\n", event.Event.Payload)
+			fmt.Printf("\n\tEvent: %v\n", event.Payload)
 		}
 	}
 }

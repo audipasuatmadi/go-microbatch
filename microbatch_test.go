@@ -26,9 +26,9 @@ func Test_ReadsDataWhenReachesBufferSize(t *testing.T) {
 	// the reader is in another thread... reading
 	go func(m *microbatch.Microbatch[int32]) {
 		var allData = []int32{}
-		result := <-m.ResultStream
+		result := <-m.ResultBatch
 		for _, event := range result {
-			allData = append(allData, event.Event.Payload)
+			allData = append(allData, event.Payload)
 		}
 		assert.Equal(t, 10, len(allData))
 		assert.Equal(t, []int32{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, allData)
@@ -58,18 +58,18 @@ func Test_ReadsDataWhenReachesBufferSizeAndFillsTheRemainingData(t *testing.T) {
 	// the reader is in another thread... reading
 	go func(m *microbatch.Microbatch[int32]) {
 		var allData = []int32{}
-		result := <-m.ResultStream
+		result := <-m.ResultBatch
 		for _, event := range result {
-			allData = append(allData, event.Event.Payload)
+			allData = append(allData, event.Payload)
 		}
 		fmt.Println(allData)
 		assert.Equal(t, 5, len(allData))
 		assert.Equal(t, []int32{1, 2, 3, 4, 5}, allData)
 
 		allData = []int32{}
-		result = <-m.ResultStream
+		result = <-m.ResultBatch
 		for _, event := range result {
-			allData = append(allData, event.Event.Payload)
+			allData = append(allData, event.Payload)
 		}
 		assert.Equal(t, 5, len(allData))
 		assert.Equal(t, []int32{6, 7, 8, 9, 10}, allData)

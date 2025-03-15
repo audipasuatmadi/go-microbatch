@@ -19,11 +19,10 @@ type Microbatch[T any] struct {
 	batchCancelCtx       context.CancelFunc
 	batchTimeoutDuration time.Duration
 
-	eventStream  chan Event[T]
-	ResultStream chan ResultBatch[T]
+	eventStream chan Event[T]
+	ResultBatch chan Batch[T]
 
-	strategy  FlushStrategy[T]
-	processor BatchProcessor[T]
+	strategy FlushStrategy[T]
 }
 
 func (m *Microbatch[T]) Add(ctx context.Context, events ...T) error {
@@ -51,20 +50,12 @@ func (m *Microbatch[T]) run() {
 	batch := Batch[T]{}
 
 	flush := func() {
-		flushBatch := m.strategy.FlushBatch(batch)
-		m.processBatch(flushBatch)
-
-		if len(batch) == len(flushBatch) {
-			batch = Batch[T]{}
-		} else {
-			remainingBatch := Batch[T]{}
-			for _, e := range batch {
-				if !e.ShouldFlush() {
-					remainingBatch = append(remainingBatch, e)
-				}
-			}
-			batch = remainingBatch
+		if len(batch) == 0 {
+			return
 		}
+
+		m.ResultBatch <- batch
+		batch = Batch[T]{}
 	}
 
 	for {
@@ -97,30 +88,21 @@ func (m *Microbatch[T]) run() {
 	}
 }
 
-func (m *Microbatch[T]) processBatch(batch Batch[T]) {
-	m.ResultStream <- m.processor.Process(batch)
-}
-
 func (m *Microbatch[T]) Stop() {
 	close(m.stop)
 	m.wg.Wait()
 }
 
 type Config[T any] struct {
-	Processor    BatchProcessor[T]
-	Strategy     FlushStrategy[T]
-	BatchTimeout *time.Duration
+	Strategy               FlushStrategy[T]
+	BatchTimeout           *time.Duration
+	DisableAutoAcknowledge bool
 }
 
 func New[T any](ctx context.Context, p Config[T]) (*Microbatch[T], error) {
-	processor := p.Processor
-	if processor == nil {
-		processor = &simpleBatchProcessor[T]{}
-	}
-
 	strategy := p.Strategy
 	if strategy == nil {
-		strategy = &SizeBasedStrategy[T]{MaxSize: 5}
+		strategy = &SizeBasedStrategy[T]{MaxSize: defaultBatchMaxSize}
 	}
 
 	batchTimeout := defaultBatchTimeoutDuration
@@ -138,8 +120,7 @@ func New[T any](ctx context.Context, p Config[T]) (*Microbatch[T], error) {
 		stop:                 make(chan struct{}),
 		isOpen:               true,
 		eventStream:          make(chan Event[T]),
-		ResultStream:         make(chan ResultBatch[T]),
+		ResultBatch:          make(chan Batch[T]),
 		strategy:             strategy,
-		processor:            processor,
 	}, nil
 }
