@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 	"time"
@@ -12,24 +13,26 @@ import (
 )
 
 func main() {
-	mb := microbatch.New[string](microbatch.NewParams{
-		MaxSize:       int32(10),
-		FlushInterval: 3 * time.Second,
-	})
+	mb, err := microbatch.New[string](context.Background(), microbatch.Config[string]{})
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	messages := []string{
 		"Hello",
 		"How are you?",
 	}
 
+	go mb.Start()
 	go simulateSendToLLM(mb)
 
 	// Simulate how people type in message platforms, where people
 	// type multiple messages which semantically related as one message.
-	mb.Add(context.Background(), messages[0])
+	ctx := context.Background()
+	mb.Add(ctx, messages[0])
 	fmt.Printf("\n> %s\n", messages[0])
 	time.Sleep(2 * time.Second)
-	mb.Add(context.Background(), messages[1])
+	mb.Add(ctx, messages[1])
 	fmt.Printf("\n> %s\n", messages[1])
 
 	// Input as many messages as you want
@@ -39,13 +42,23 @@ func main() {
 		fmt.Printf("> ")
 		userMessage, _ = in.ReadString('\n')
 
-		mb.Add(context.Background(), strings.TrimSpace(userMessage))
+		if userMessage == "exit\n" {
+			mb.Stop()
+			break
+		}
+
+		err := mb.Add(context.Background(), strings.TrimSpace(userMessage))
+		if err != nil {
+			log.Println("error:", err)
+		}
 	}
 }
 
-func simulateSendToLLM(mb microbatch.Microbatch[string]) {
-	for {
-		data := mb.ReadData(context.Background())
-		fmt.Printf("\nsending \"%s\" to LLM\n> ", strings.Join(data, " | "))
+func simulateSendToLLM(mb *microbatch.Microbatch[string]) {
+	for result := range mb.ResultBatch {
+		fmt.Printf("\nBatch:\n")
+		for _, event := range result {
+			fmt.Printf("\n\tEvent: %v\n", event.Payload)
+		}
 	}
 }

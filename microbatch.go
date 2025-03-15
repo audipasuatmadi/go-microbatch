@@ -2,84 +2,124 @@ package microbatch
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 )
 
-type Microbatch[T any] interface {
-	Add(ctx context.Context, data T)
-	ReadData(ctx context.Context) (data []T)
-}
-
-type microbatch[T any] struct {
+type Microbatch[T any] struct {
+	wg sync.WaitGroup
 	mu sync.Mutex
 
-	buffer         []T
-	bufferIterator int32
-	maxBufferSize  int32
-	flushInterval  time.Duration
-	fullChan       chan bool
-	hasResetChan   chan bool
+	ctx    context.Context
+	stop   chan struct{}
+	isOpen bool
+
+	batchCtx             context.Context
+	batchCancelCtx       context.CancelFunc
+	batchTimeoutDuration time.Duration
+
+	eventStream chan Event[T]
+	ResultBatch chan Batch[T]
+
+	strategy FlushStrategy[T]
 }
 
-func (m *microbatch[T]) Add(ctx context.Context, data T) {
+func (m *Microbatch[T]) Add(ctx context.Context, events ...T) error {
 	m.mu.Lock()
-	if m.bufferIterator < m.maxBufferSize {
-		m.buffer[m.bufferIterator] = data
-		m.bufferIterator++
+	defer m.mu.Unlock()
 
-		if m.bufferIterator == m.maxBufferSize {
-			m.fullChan <- true
-			<-m.hasResetChan
+	if !m.isOpen {
+		return fmt.Errorf("%w: microbatch is closed", ErrCantAddJob)
+	}
+
+	for _, event := range events {
+		m.eventStream <- Event[T]{Payload: event, addedAt: time.Now()}
+	}
+
+	return nil
+}
+
+func (m *Microbatch[T]) Start() {
+	m.wg.Add(1)
+	go m.run()
+}
+
+func (m *Microbatch[T]) run() {
+	defer m.wg.Done()
+	batch := Batch[T]{}
+
+	flush := func() {
+		if len(batch) == 0 {
+			return
 		}
-	}
-	m.mu.Unlock()
 
-}
-
-func (m *microbatch[T]) ReadData(ctx context.Context) (data []T) {
-	<-m.fullChan
-	var allData []T = make([]T, 0)
-	for i := int32(0); i < m.bufferIterator; i++ {
-		allData = append(allData, m.buffer[i])
+		m.ResultBatch <- batch
+		batch = Batch[T]{}
 	}
 
-	m.buffer = make([]T, m.maxBufferSize)
-	m.bufferIterator = 0
-	m.hasResetChan <- true
-	return allData
-}
-
-func (m *microbatch[T]) batchByInterval() {
 	for {
-		time.Sleep(m.flushInterval)
-		if m.bufferIterator > 0 {
+		select {
+		case event, ok := <-m.eventStream:
+			if !ok {
+				return
+			}
+			batch = append(batch, event)
+			if !m.strategy.ShouldFlush(batch) {
+				continue
+			}
+			flush()
+
+		// TODO: implement context cancellation from m.ctx
+		case <-m.batchCtx.Done():
+			if len(batch) == 0 {
+				continue
+			}
+			flush()
+			m.batchCtx, m.batchCancelCtx = context.WithTimeout(m.ctx, m.batchTimeoutDuration)
+
+		case <-m.stop:
 			m.mu.Lock()
-			m.fullChan <- true
-			<-m.hasResetChan
+			m.isOpen = false
 			m.mu.Unlock()
+			close(m.eventStream)
+			return
 		}
 	}
 }
 
-type NewParams struct {
-	MaxSize       int32
-	FlushInterval time.Duration
+func (m *Microbatch[T]) Stop() {
+	close(m.stop)
+	m.wg.Wait()
 }
 
-func New[T any](p NewParams) Microbatch[T] {
-	m := &microbatch[T]{
-		buffer:         make([]T, p.MaxSize),
-		bufferIterator: 0,
-		maxBufferSize:  p.MaxSize,
-		flushInterval:  p.FlushInterval,
-		fullChan:       make(chan bool, 1),
-		hasResetChan:   make(chan bool, 1),
+type Config[T any] struct {
+	Strategy     FlushStrategy[T]
+	BatchTimeout *time.Duration
+}
+
+func New[T any](ctx context.Context, p Config[T]) (*Microbatch[T], error) {
+	strategy := p.Strategy
+	if strategy == nil {
+		strategy = &SizeBasedStrategy[T]{MaxSize: defaultBatchMaxSize}
 	}
 
-	if p.FlushInterval != 0 {
-		go m.batchByInterval()
+	batchTimeout := defaultBatchTimeoutDuration
+	if p.BatchTimeout != nil {
+		batchTimeout = *p.BatchTimeout
 	}
 
-	return m
+	batchCtx, batchCtxCancel := context.WithTimeout(ctx, batchTimeout)
+
+	return &Microbatch[T]{
+		ctx:                  ctx,
+		batchCtx:             batchCtx,
+		batchCancelCtx:       batchCtxCancel,
+		batchTimeoutDuration: batchTimeout,
+		stop:                 make(chan struct{}),
+		isOpen:               true,
+		eventStream:          make(chan Event[T]),
+		ResultBatch:          make(chan Batch[T]),
+		strategy:             strategy,
+	}, nil
 }
