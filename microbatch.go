@@ -94,9 +94,8 @@ func (m *Microbatch[T]) Stop() {
 }
 
 type Config[T any] struct {
-	Strategy               FlushStrategy[T]
-	BatchTimeout           *time.Duration
-	DisableAutoAcknowledge bool
+	Strategy     FlushStrategy[T]
+	BatchTimeout *time.Duration
 }
 
 func New[T any](ctx context.Context, p Config[T]) (*Microbatch[T], error) {
