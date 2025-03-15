@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/audipasuatmadi/go-microbatch"
 	"github.com/stretchr/testify/assert"
@@ -81,6 +82,46 @@ func Test_ReadsDataWhenReachesBufferSizeAndFillsTheRemainingData(t *testing.T) {
 		m.Add(context.Background(), temperature)
 	}
 
+	wg.Wait()
+}
+
+func Test_ReadsDataManually(t *testing.T) {
+	var wg sync.WaitGroup
+	wg.Add(1)
+
+	duration := 100000 * time.Hour
+	ctx, cancel := context.WithCancel(context.Background())
+
+	m, err := microbatch.New[int32](ctx, microbatch.Config[int32]{
+		Strategy:     &microbatch.SizeBasedStrategy[int32]{MaxSize: 100},
+		BatchTimeout: &duration,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dummyData := []int32{1, 2, 3, 4, 5}
+	go m.Start()
+
+	go func(m *microbatch.Microbatch[int32]) {
+		var allData = []int32{}
+		result := <-m.ResultBatch
+		for _, event := range result {
+			allData = append(allData, event.Payload)
+		}
+		fmt.Println(allData)
+		assert.Equal(t, 5, len(allData))
+		assert.Equal(t, []int32{1, 2, 3, 4, 5}, allData)
+
+		wg.Done()
+	}(m)
+
+	for _, temperature := range dummyData {
+		m.Add(ctx, temperature)
+	}
+
+	// manually flush the data
+	cancel()
 	wg.Wait()
 }
 
