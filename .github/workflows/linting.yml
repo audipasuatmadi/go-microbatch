@@ -3,10 +3,10 @@ name: "CI: Linting"
 on:
   pull_request:
     branches:
-      - main
+      - master
   push:
     branches:
-      - main
+      - master
 
 env:
   GO_VERSION: stable
