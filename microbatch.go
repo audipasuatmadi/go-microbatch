@@ -60,6 +60,14 @@ func (m *Microbatch[T]) run() {
 
 	for {
 		select {
+		case <-m.ctx.Done():
+			m.mu.Lock()
+			m.isOpen = false
+			m.mu.Unlock()
+			m.batchCancelCtx() // cancel timeout context
+			close(m.eventStream)
+			return
+
 		case event, ok := <-m.eventStream:
 			if !ok {
 				return
@@ -70,7 +78,6 @@ func (m *Microbatch[T]) run() {
 			}
 			flush()
 
-		// TODO: implement context cancellation from m.ctx
 		case <-m.batchCtx.Done():
 			if len(batch) == 0 {
 				continue
